@@ -18,11 +18,24 @@
 #include "carla/client/detail/ActorFactory.h"
 #include "carla/trafficmanager/TrafficManager.h"
 #include "carla/sensor/Deserializer.h"
+#include "carla/trafficmanager/SnippetProfiler.h"
 
 #include <exception>
 #include <thread>
 
 using namespace std::string_literals;
+
+#if 1
+#define TIMER(x) static TicToc timer(x)
+#define TIC timer.tic()
+#define TOC(x) timer.toc(x)
+#define FINISH timer.finish()
+#else
+#define TIMER(x)
+#define TIC
+#define TOC(x)
+#define FINISH
+#endif
 
 namespace carla {
 namespace client {
@@ -43,22 +56,30 @@ namespace detail {
       log_warning("Simulator API version  =", vs);
     }
   }
-
+  TIMER("Simulator");
   static bool SynchronizeFrame(uint64_t frame, const Episode &episode, time_duration timeout) {
+    TIC;
     bool result = true;
     auto start = std::chrono::system_clock::now();
+    TOC("chrono");
     while (frame > episode.GetState()->GetTimestamp().frame) {
+      TOC("other");
       std::this_thread::yield();
+      TOC("yield");
       auto end = std::chrono::system_clock::now();
       auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end-start);
+      TOC("chrono");
       if(timeout.to_chrono() < diff) {
         result = false;
         break;
       }
     }
+    TOC("other");
     if(result) {
       carla::traffic_manager::TrafficManager::Tick();
     }
+    TOC("TrafficManager");
+    FINISH;
 
     return result;
   }
@@ -157,7 +178,9 @@ namespace detail {
 
   uint64_t Simulator::Tick(time_duration timeout) {
     DEBUG_ASSERT(_episode != nullptr);
+    TIC;
     const auto frame = _client.SendTickCue();
+    TOC("SendTickCue");
     bool result = SynchronizeFrame(frame, *_episode, timeout);
     if (!result) {
       throw_exception(TimeoutException(_client.GetEndpoint(), timeout));

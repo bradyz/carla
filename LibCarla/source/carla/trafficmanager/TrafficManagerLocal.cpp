@@ -9,6 +9,7 @@
 #include "carla/client/detail/Simulator.h"
 
 #include "carla/trafficmanager/TrafficManagerLocal.h"
+#include "carla/trafficmanager/SnippetProfiler.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -117,6 +118,18 @@ void TrafficManagerLocal::Start() {
   worker_thread = std::make_unique<std::thread>(&TrafficManagerLocal::Run, this);
 }
 
+#if 1
+#define TIMER(x) static TicToc timer(x)
+#define TIC timer.tic()
+#define TOC(x) timer.toc(x)
+#define FINISH timer.finish()
+#else
+#define TIMER(x)
+#define TIC
+#define TOC(x)
+#define FINISH
+#endif
+
 void TrafficManagerLocal::Run() {
 
   localization_frame.reserve(INITIAL_SIZE);
@@ -125,10 +138,13 @@ void TrafficManagerLocal::Run() {
   control_frame.reserve(INITIAL_SIZE);
   current_reserved_capacity = INITIAL_SIZE;
 
+  TIMER("TrafficManager");
   while (run_traffic_manger.load()) {
-
+    TIC;
+    
     bool synchronous_mode = parameters.GetSynchronousMode();
     bool hybrid_physics_mode = parameters.GetHybridPhysicsMode();
+    TOC("param");
 
     // Wait for external trigger to initiate cycle in synchronous mode.
     if (synchronous_mode) {
@@ -136,6 +152,7 @@ void TrafficManagerLocal::Run() {
       step_begin_trigger.wait(lock, [this]() {return step_begin.load() || !run_traffic_manger.load();});
       step_begin.store(false);
     }
+    TOC("sync");
 
     // Skipping velocity update if elapsed time is less than 0.05s in asynchronous, hybrid mode.
     if (!synchronous_mode && hybrid_physics_mode) {
@@ -147,10 +164,14 @@ void TrafficManagerLocal::Run() {
       }
       previous_update_instance = current_instance;
     }
+    TOC("hybrid");
 
     std::unique_lock<std::mutex> registration_lock(registration_mutex);
+    TOC("registration_lock");
+    
     // Updating simulation state, actor life cycle and performing necessary cleanup.
     alsm.Update();
+    TOC("alsm.Update");
 
     // Re-allocating inter-stage communication frames based on changed number of registered vehicles.
     int current_registered_vehicles_state = registered_vehicles.GetState();
@@ -175,6 +196,7 @@ void TrafficManagerLocal::Run() {
 
       registered_vehicles_state = registered_vehicles.GetState();
     }
+    TOC("inter-stage");
 
     // Reset frames for current cycle.
     localization_frame.clear();
@@ -185,31 +207,41 @@ void TrafficManagerLocal::Run() {
     tl_frame.resize(number_of_vehicles);
     control_frame.clear();
     control_frame.resize(number_of_vehicles);
+    TOC("reset");
 
     // Run core operation stages.
     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
       localization_stage.Update(index);
     }
+    TOC("localization_stage");
     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
       collision_stage.Update(index);
     }
     collision_stage.ClearCycleCache();
+    TOC("collision_stage");
 
     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
       traffic_light_stage.Update(index);
       motion_plan_stage.Update(index);
     }
+    TOC("traffic_light_stage");
 
     registration_lock.unlock();
+    TOC("registration_lock.unlock");
 
     // Sending the current cycle's batch command to the simulator.
     if (synchronous_mode) {
-      episode_proxy.Lock()->ApplyBatchSync(control_frame, false);
+      // If TCP and RPC preserve the call order then ApplyBatchSync is overkill here.
+      // We do not need the response and only require the control_frame to be executed
+      // before any other client commands
+      episode_proxy.Lock()->ApplyBatch(control_frame, false);
       step_end.store(true);
       step_end_trigger.notify_one();
     } else {
       episode_proxy.Lock()->ApplyBatch(control_frame, false);
     }
+    TOC("end");
+    FINISH;
   }
 }
 

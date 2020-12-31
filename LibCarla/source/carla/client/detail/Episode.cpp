@@ -11,12 +11,27 @@
 #include "carla/client/detail/WalkerNavigation.h"
 #include "carla/sensor/Deserializer.h"
 #include "carla/trafficmanager/TrafficManager.h"
+#include "carla/trafficmanager/SnippetProfiler.h"
 
 #include <exception>
+
+#if 0
+#define TIMER(x) static TicToc timer(x)
+#define TIC timer.tic()
+#define TOC(x) timer.toc(x)
+#define FINISH timer.finish()
+#else
+#define TIMER(x)
+#define TIC
+#define TOC(x)
+#define FINISH
+#endif
 
 namespace carla {
 namespace client {
 namespace detail {
+
+TIMER("Episode");
 
 using namespace std::chrono_literals;
 
@@ -53,16 +68,19 @@ using namespace std::chrono_literals;
   void Episode::Listen() {
     std::weak_ptr<Episode> weak = shared_from_this();
     _client.SubscribeToStream(_token, [weak](auto buffer) {
+      TOC("IDLE");
       auto self = weak.lock();
       if (self != nullptr) {
 
         auto data = sensor::Deserializer::Deserialize(std::move(buffer));
         auto next = std::make_shared<const EpisodeState>(CastData(*data));
         auto prev = self->GetState();
+        TOC("Deserialize");
 
         // TODO: Update how the map change is detected
         // bool HasMapChanged = next->HasMapChanged();
         bool UpdateLights = next->IsLightUpdatePending();
+        TOC("UpdateLights");
 
         /// Check for pending exceptions (Mainly TM server closed)
         if(self->_pending_exceptions) {
@@ -107,6 +125,9 @@ using namespace std::chrono_literals;
           // Call user callbacks.
           self->_on_tick_callbacks.Call(next);
         }
+        
+        TOC("CBS");
+        FINISH;
       }
     });
   }

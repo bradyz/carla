@@ -19,10 +19,23 @@
 #include "carla/rpc/WalkerBoneControl.h"
 #include "carla/rpc/WalkerControl.h"
 #include "carla/streaming/Client.h"
+#include "carla/trafficmanager/SnippetProfiler.h"
 
 #include <rpc/rpc_error.h>
 
 #include <thread>
+
+#if 1
+#define TIMER(x) static TicToc timer(x)
+#define TIC timer.tic()
+#define TOC(x) timer.toc(x)
+#define FINISH timer.finish()
+#else
+#define TIMER(x)
+#define TIC
+#define TOC(x)
+#define FINISH
+#endif
 
 namespace carla {
 namespace client {
