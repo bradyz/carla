@@ -103,7 +103,7 @@ public:
     time_[name] += duration_cast<duration<double>>(current_time - t0_).count();
     t0_ = current_time;
   }
-  void finish(double print_interval=5) {
+  void finish(double print_interval=5, double merge_below_percent=0.5) {
     using namespace std::chrono;
     cnt_ += 1;
     auto current_time = high_resolution_clock::now();
@@ -112,10 +112,17 @@ public:
       std::ostringstream ss;
       ss << "-----" << name_ << "-----" << std::endl;
       double total = 0;
-      for(auto & v: time_) {
-        ss << std::setw (30) << v.first << "    " << v.second / cnt_ << std::endl;
+      for(auto & v: time_)
         total += v.second;
+      double merged = 0;
+      for(auto & v: time_) {
+        if (v.second < total * merge_below_percent / 100.)
+          merged += v.second;
+        else
+          ss << std::setw (30) << v.first << "    " << v.second / cnt_ << std::endl;
       }
+      if (merged > 0)
+        ss << std::setw (30) << "<merged>" << "    " << merged / cnt_ << std::endl;
       ss << std::setw (30) << "total" << "    " << total / cnt_ << std::endl;
       ss << "------------" << std::endl;
       {
