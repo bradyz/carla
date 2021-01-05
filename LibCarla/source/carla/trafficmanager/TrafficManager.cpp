@@ -128,7 +128,7 @@ void TrafficManager::CreateTrafficManagerServer(
   std::pair<std::string, uint16_t> serverTM;
 
   /// Create local instance of TM
-  TrafficManagerLocal* tm_ptr = new TrafficManagerLocal(
+  FastTrafficManagerLocal* tm_ptr = new FastTrafficManagerLocal(
     longitudinal_param,
     longitudinal_highway_param,
     lateral_param,
