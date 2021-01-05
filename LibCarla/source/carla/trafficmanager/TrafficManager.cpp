@@ -129,6 +129,7 @@ void TrafficManager::CreateTrafficManagerServer(
 
   /// Create local instance of TM
   FastTrafficManagerLocal* tm_ptr = new FastTrafficManagerLocal(
+//   TrafficManagerLocal* tm_ptr = new TrafficManagerLocal(
     longitudinal_param,
     longitudinal_highway_param,
     lateral_param,

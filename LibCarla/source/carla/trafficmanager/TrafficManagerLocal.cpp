@@ -210,21 +210,21 @@ void TrafficManagerLocal::Run() {
     TOC("reset");
 
     // Run core operation stages.
-    for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
-      localization_stage.Update(index);
-    }
-    TOC("localization_stage");
-    for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
-      collision_stage.Update(index);
-    }
-    collision_stage.ClearCycleCache();
-    TOC("collision_stage");
-
-    for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
-      traffic_light_stage.Update(index);
-      motion_plan_stage.Update(index);
-    }
-    TOC("traffic_light_stage");
+//     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
+//       localization_stage.Update(index);
+//     }
+//     TOC("localization_stage");
+//     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
+//       collision_stage.Update(index);
+//     }
+//     collision_stage.ClearCycleCache();
+//     TOC("collision_stage");
+// 
+//     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
+//       traffic_light_stage.Update(index);
+//       motion_plan_stage.Update(index);
+//     }
+//     TOC("traffic_light_stage");
 
     registration_lock.unlock();
     TOC("registration_lock.unlock");
@@ -426,11 +426,6 @@ void TrafficManagerLocal::SetRandomDeviceSeed(const uint64_t _seed) {
 
 
 void FastTrafficManagerLocal::Start() {
-  // Setup the map (cc::World is not really used, so let's use the proxy instead)
-  const carla::SharedPtr<cc::Map> world_map = episode_proxy.Lock()->GetCurrentMap();
-  local_map = std::make_shared<InMemoryMap>(world_map);
-  local_map->SetUp();
-
   // Start the worker thread
   run_traffic_manger.store(true);
   worker_thread = std::make_unique<std::thread>(&FastTrafficManagerLocal::Run, this);
@@ -453,7 +448,6 @@ void FastTrafficManagerLocal::Stop() {
 
 void FastTrafficManagerLocal::Release() {
   Stop();
-  local_map.reset();
 }
 
 void FastTrafficManagerLocal::Reset() {
@@ -486,11 +480,18 @@ FastTrafficManagerLocal::~FastTrafficManagerLocal() {
 }
 
   /// This method registers a vehicle with the traffic manager.
-void FastTrafficManagerLocal::RegisterVehicles(const std::vector<ActorPtr> &actor_list) { /* TODO */ }
+void FastTrafficManagerLocal::RegisterVehicles(const std::vector<ActorPtr> &actor_list) {
+  std::lock_guard<std::mutex> registration_lock(registration_mutex);
+  for (const ActorPtr &vehicle: actor_list)
+    alsm.Register(vehicle->GetId());
+}
 
   /// This method unregisters a vehicle from traffic manager.
-void FastTrafficManagerLocal::UnregisterVehicles(const std::vector<ActorPtr> &actor_list) { /* TODO */ }
-
+void FastTrafficManagerLocal::UnregisterVehicles(const std::vector<ActorPtr> &actor_list) {
+  std::lock_guard<std::mutex> registration_lock(registration_mutex);
+  for (const ActorPtr &vehicle: actor_list)
+    alsm.Unregister(vehicle->GetId());
+}
 
   /// Method to provide synchronous tick
 bool FastTrafficManagerLocal::SynchronousTick() {
@@ -608,6 +609,11 @@ FastTrafficManagerLocal::ActorInfo FastTrafficManagerLocal::ActorInfo::update_an
 }
 
 void FastTrafficManagerLocal::Run() {
+  auto world = cc::World(episode_proxy);
+  auto local_map = std::make_shared<InMemoryMap>(world.GetMap());
+  local_map->SetUp();
+
+
   TIMER("FastTrafficManagerLocal");
   while (run_traffic_manger.load()) {
     TIC;
@@ -633,12 +639,19 @@ void FastTrafficManagerLocal::Run() {
     }
     TOC("updated_actor_info");
     
+    std::unique_lock<std::mutex> registration_lock(registration_mutex);
+    TOC("registration_lock");
+    
     // Updating simulation state, actor life cycle and performing necessary cleanup.
-    // TODO: alsm.Update();
+    alsm.Update(world);
     TOC("alsm.Update");
 
     // TODO: Main TM parts
 
+    
+    registration_lock.unlock();
+    TOC("registration_lock.unlock");
+    
     // Sending the current cycle's batch command to the simulator.
     if (synchronous_mode) {
       // If TCP and RPC preserve the call order then ApplyBatchSync is overkill here.

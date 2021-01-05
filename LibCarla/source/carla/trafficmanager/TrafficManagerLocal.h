@@ -241,9 +241,6 @@ protected:
   /// Carla's client connection object.
   carla::client::detail::EpisodeProxy episode_proxy;
 
-  /// Pointer to local map cache.
-  LocalMapPtr local_map;
-  
   struct GlobalParameters {
     bool synchronous_mode = false;
     bool hybrid_physics_mode = false;
@@ -390,6 +387,11 @@ protected:
   std::condition_variable step_end_trigger;
   /// Single worker thread for sequential execution of sub-components.
   std::unique_ptr<std::thread> worker_thread;
+  /// Mutex to prevent vehicle registration during frame array re-allocation.
+  std::mutex registration_mutex;
+
+protected: // ALSM
+  FastALSM alsm;
 };
 
 } // namespace traffic_manager
