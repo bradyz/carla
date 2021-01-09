@@ -1,7 +1,6 @@
-
 #include "carla/trafficmanager/Constants.h"
-
 #include "carla/trafficmanager/LocalizationStage.h"
+#include "carla/trafficmanager/ALSM.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -10,38 +9,34 @@ using namespace constants::PathBufferUpdate;
 using namespace constants::LaneChange;
 using namespace constants::WaypointSelection;
 
-LocalizationStage::LocalizationStage(
-  const std::vector<ActorId> &vehicle_id_list,
-  BufferMap &buffer_map,
-  const SimulationState &simulation_state,
-  TrackTraffic &track_traffic,
-  const LocalMapPtr &local_map,
-  Parameters &parameters,
-  std::vector<ActorId>& marked_for_removal,
-  LocalizationFrame &output_array,
-  cc::DebugHelper &debug_helper,
-  RandomGeneratorMap &random_devices)
-  : vehicle_id_list(vehicle_id_list),
+LocalizationStage::LocalizationStage(const FastALSM &alsm,
+                                     BufferMap &buffer_map,
+                                     TrackTraffic &track_traffic,
+                                     const LocalMapPtr &local_map,
+                                     Parameters &parameters,
+                                     LocalizationFrame &output_array,
+                                     cc::DebugHelper &debug_helper,
+                                     RandomGeneratorMap &random_devices)
+  : alsm(alsm),
     buffer_map(buffer_map),
-    simulation_state(simulation_state),
     track_traffic(track_traffic),
     local_map(local_map),
     parameters(parameters),
-    marked_for_removal(marked_for_removal),
     output_array(output_array),
     debug_helper(debug_helper),
     random_devices(random_devices) {}
 
-void LocalizationStage::Update(const unsigned long index) {
+void LocalizationStage::Update(const ActorId actor_id) {
+  const Info& actor_info = alsm.ActorInfo(actor_id);
+  const KinematicState& actor_state = actor_info.kinematic_state;
 
-  const ActorId actor_id = vehicle_id_list.at(index);
   const cg::Location vehicle_location = simulation_state.GetLocation(actor_id);
   const cg::Vector3D heading_vector = simulation_state.GetHeading(actor_id);
   const cg::Vector3D vehicle_velocity_vector = simulation_state.GetVelocity(actor_id);
   const float vehicle_speed = vehicle_velocity_vector.Length();
 
   // Speed dependent waypoint horizon length.
-  float horizon_length = std::min(vehicle_speed * HORIZON_RATE + MINIMUM_HORIZON_LENGTH, MAXIMUM_HORIZON_LENGTH);
+  const float horizon_length = std::min(vehicle_speed * HORIZON_RATE + MINIMUM_HORIZON_LENGTH, MAXIMUM_HORIZON_LENGTH);
   const float horizon_square = SQUARE(horizon_length);
 
   if (buffer_map.find(actor_id) == buffer_map.end()) {
@@ -52,11 +47,9 @@ void LocalizationStage::Update(const unsigned long index) {
 
   // Clear buffer if vehicle is too far from the first waypoint in the buffer.
   if (!waypoint_buffer.empty() &&
-      cg::Math::DistanceSquared(waypoint_buffer.front()->GetLocation(),
-                                vehicle_location) > SQUARE(MAX_START_DISTANCE)) {
+      cg::Math::DistanceSquared(waypoint_buffer.front()->GetLocation(), actor_state.location) > SQUARE(MAX_START_DISTANCE)) {
 
-    auto number_of_pops = waypoint_buffer.size();
-    for (uint64_t j = 0u; j < number_of_pops; ++j) {
+    for (uint64_t j = 0u; j < waypoint_buffer.size(); ++j) {
       PopWaypoint(actor_id, track_traffic, waypoint_buffer);
     }
   }
@@ -172,7 +165,8 @@ void LocalizationStage::Update(const unsigned long index) {
       if (!parameters.GetOSMMode()) {
         std::cout << "This map has dead-end roads, please change the set_open_street_map parameter to true" << std::endl;
       }
-      marked_for_removal.push_back(actor_id);
+
+      alsm.Remove(actor_id);
       break;
     }
     SimpleWaypointPtr next_wp_selection = next_waypoints.at(selection_index);

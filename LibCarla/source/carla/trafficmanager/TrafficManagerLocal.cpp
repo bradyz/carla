@@ -141,7 +141,7 @@ void TrafficManagerLocal::Run() {
   TIMER("TrafficManager");
   while (run_traffic_manger.load()) {
     TIC;
-    
+
     bool synchronous_mode = parameters.GetSynchronousMode();
     bool hybrid_physics_mode = parameters.GetHybridPhysicsMode();
     TOC("param");
@@ -168,7 +168,7 @@ void TrafficManagerLocal::Run() {
 
     std::unique_lock<std::mutex> registration_lock(registration_mutex);
     TOC("registration_lock");
-    
+
     // Updating simulation state, actor life cycle and performing necessary cleanup.
     alsm.Update();
     TOC("alsm.Update");
@@ -177,7 +177,6 @@ void TrafficManagerLocal::Run() {
     int current_registered_vehicles_state = registered_vehicles.GetState();
     unsigned long number_of_vehicles = vehicle_id_list.size();
     if (registered_vehicles_state != current_registered_vehicles_state || number_of_vehicles != registered_vehicles.Size()) {
-
       vehicle_id_list = registered_vehicles.GetIDList();
 
       std::sort(vehicle_id_list.begin(), vehicle_id_list.end());
@@ -210,21 +209,21 @@ void TrafficManagerLocal::Run() {
     TOC("reset");
 
     // Run core operation stages.
-//     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
-//       localization_stage.Update(index);
-//     }
-//     TOC("localization_stage");
-//     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
-//       collision_stage.Update(index);
-//     }
-//     collision_stage.ClearCycleCache();
-//     TOC("collision_stage");
-// 
-//     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
-//       traffic_light_stage.Update(index);
-//       motion_plan_stage.Update(index);
-//     }
-//     TOC("traffic_light_stage");
+     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
+       localization_stage.Update(index);
+     }
+     TOC("localization_stage");
+     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
+       collision_stage.Update(index);
+     }
+     collision_stage.ClearCycleCache();
+     TOC("collision_stage");
+
+     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
+       traffic_light_stage.Update(index);
+       motion_plan_stage.Update(index);
+     }
+     TOC("traffic_light_stage");
 
     registration_lock.unlock();
     TOC("registration_lock.unlock");
@@ -463,12 +462,49 @@ FastTrafficManagerLocal::FastTrafficManagerLocal(std::vector<float> longitudinal
                           float perc_decrease_from_limit,
                           cc::detail::EpisodeProxy episode_proxy,
                           uint16_t RPCportTM)
-                          
+
   : longitudinal_PID_parameters(longitudinal_PID_parameters),
     longitudinal_highway_PID_parameters(longitudinal_highway_PID_parameters),
     lateral_PID_parameters(lateral_PID_parameters),
     lateral_highway_PID_parameters(lateral_highway_PID_parameters),
     episode_proxy(episode_proxy),
+
+    // autopilot components
+    localization_stage(LocalizationStage(alsm,
+                                         buffer_map,
+                                         track_traffic,
+                                         local_map,
+                                         parameters,
+                                         localization_frame,
+                                         debug_helper,
+                                         random_devices)),
+
+    collision_stage(CollisionStage(alsm,
+                                   buffer_map,
+                                   track_traffic,
+                                   parameters,
+                                   collision_frame,
+                                   debug_helper,
+                                   random_devices)),
+    traffic_light_stage(TrafficLightStage(alsm,
+                                          buffer_map,
+                                          parameters,
+                                          world,
+                                          tl_frame,
+                                          random_devices)),
+    motion_plan_stage(MotionPlanStage(alsm,
+                                      parameters,
+                                      buffer_map,
+                                      track_traffic,
+                                      longitudinal_PID_parameters,
+                                      longitudinal_highway_PID_parameters,
+                                      lateral_PID_parameters,
+                                      lateral_highway_PID_parameters,
+                                      localization_frame,
+                                      collision_frame,
+                                      tl_frame,
+                                      world,
+                                      control_frame)),
     server(TrafficManagerServer(RPCportTM, static_cast<carla::traffic_manager::TrafficManagerBase *>(this)))  {
   global_parameters.percentage_speed_difference = perc_decrease_from_limit;
   Start();
@@ -617,7 +653,7 @@ void FastTrafficManagerLocal::Run() {
   TIMER("FastTrafficManagerLocal");
   while (run_traffic_manger.load()) {
     TIC;
-    
+
     bool synchronous_mode = global_parameters.synchronous_mode;
     bool hybrid_physics_mode = global_parameters.hybrid_physics_mode;
     TOC("param");
@@ -629,7 +665,7 @@ void FastTrafficManagerLocal::Run() {
       step_begin.store(false);
     }
     TOC("sync");
-    
+
     std::unordered_map<ActorId, ActorInfo> updated_actor_info;
     {
       // Fetch all actor info and apply the global parameters
@@ -638,20 +674,46 @@ void FastTrafficManagerLocal::Run() {
         updated_actor_info[e.first] = e.second->update_and_reset(global_parameters);
     }
     TOC("updated_actor_info");
-    
+
     std::unique_lock<std::mutex> registration_lock(registration_mutex);
     TOC("registration_lock");
-    
+
     // Updating simulation state, actor life cycle and performing necessary cleanup.
     alsm.Update(world);
     TOC("alsm.Update");
 
-    // TODO: Main TM parts
+    // Actors changed.
+    if (num_actors != actor_info.size()) {
+      num_actors = actor_info.size()
+    }
 
-    
+    // Reset frames for current cycle.
+    localization_frame.clear();
+    collision_frame.clear();
+    tl_frame.clear();
+    control_frame.clear();
+    TOC("reset");
+
     registration_lock.unlock();
     TOC("registration_lock.unlock");
-    
+
+    // Run core operation stages.
+     for (unsigned long index = 0u; index < n_vehicles; ++index) {
+       localization_stage.Update(index);
+     }
+     TOC("localization_stage");
+     for (unsigned long index = 0u; index < n_vehicles; ++index) {
+       collision_stage.Update(index);
+     }
+     collision_stage.ClearCycleCache();
+     TOC("collision_stage");
+
+     for (unsigned long index = 0u; index < n_vehicles; ++index) {
+       traffic_light_stage.Update(index);
+       motion_plan_stage.Update(index);
+     }
+     TOC("traffic_light_stage");
+
     // Sending the current cycle's batch command to the simulator.
     if (synchronous_mode) {
       // If TCP and RPC preserve the call order then ApplyBatchSync is overkill here.

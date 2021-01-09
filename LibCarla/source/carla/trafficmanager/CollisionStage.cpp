@@ -3,8 +3,8 @@
 
 #include "carla/trafficmanager/Constants.h"
 #include "carla/trafficmanager/LocalizationUtils.h"
-
 #include "carla/trafficmanager/CollisionStage.h"
+#include "carla/trafficmanager/ALSM.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -16,16 +16,14 @@ using namespace constants::Collision;
 using constants::WaypointSelection::JUNCTION_LOOK_AHEAD;
 
 CollisionStage::CollisionStage(
-  const std::vector<ActorId> &vehicle_id_list,
-  const SimulationState &simulation_state,
+  const FastALSM &alsm,
   const BufferMap &buffer_map,
   const TrackTraffic &track_traffic,
   const Parameters &parameters,
   CollisionFrame &output_array,
   cc::DebugHelper &debug_helper,
   RandomGeneratorMap &random_devices)
-  : vehicle_id_list(vehicle_id_list),
-    simulation_state(simulation_state),
+  : alsm(alsm),
     buffer_map(buffer_map),
     track_traffic(track_traffic),
     parameters(parameters),
@@ -33,39 +31,42 @@ CollisionStage::CollisionStage(
     debug_helper(debug_helper),
     random_devices(random_devices) {}
 
-void CollisionStage::Update(const unsigned long index) {
+void CollisionStage::Update(const ActorId index) {
   ActorId obstacle_id = 0u;
   bool collision_hazard = false;
   float available_distance_margin = std::numeric_limits<float>::infinity();
 
-  const ActorId ego_actor_id = vehicle_id_list.at(index);
-  if (simulation_state.ContainsActor(ego_actor_id)) {
-    const cg::Location ego_location = simulation_state.GetLocation(ego_actor_id);
-    const Buffer &ego_buffer = buffer_map.at(ego_actor_id);
+  const FastALSM::Info &actor_info = alsm.ActorInfo(actor_id);
+
+  if (actor_info.alive && actor_info.registered) {
+    const cg::Location& actor_location = actor_info.kinematic_state.location;
+
+    const Buffer &ego_buffer = buffer_map.at(actor_id);
     const unsigned long look_ahead_index = GetTargetWaypoint(ego_buffer, JUNCTION_LOOK_AHEAD).second;
 
-    ActorIdSet overlapping_actors = track_traffic.GetOverlappingVehicles(ego_actor_id);
+    ActorIdSet overlapping_actors = track_traffic.GetOverlappingVehicles(actor_id);
     std::vector<ActorId> collision_candidate_ids;
 
     // Run through vehicles with overlapping paths and filter them;
     float collision_radius_square = SQUARE(MAX_COLLISION_RADIUS);
     for (ActorId overlapping_actor_id : overlapping_actors) {
+      const FastALSM::Info &overlapping_actor_info = alsm.ActorInfo(overlapping_actor_id);
+      const cg::Location &overlapping_actor_location = overlapping_actor_info.kinematic_state.location;
+
       // If actor is within maximum collision avoidance and vertical overlap range.
-      const cg::Location &overlapping_actor_location = simulation_state.GetLocation(overlapping_actor_id);
-      if (overlapping_actor_id != ego_actor_id
-          && cg::Math::DistanceSquared(overlapping_actor_location, ego_location) < collision_radius_square
-          && std::abs(ego_location.z - overlapping_actor_location.z) < VERTICAL_OVERLAP_THRESHOLD) {
+      if (overlapping_actor_id != actor_id
+          && cg::Math::DistanceSquared(overlapping_actor_location, actor_location) < collision_radius_square
+          && std::abs(actor_location.z - overlapping_actor_location.z) < VERTICAL_OVERLAP_THRESHOLD) {
         collision_candidate_ids.push_back(overlapping_actor_id);
       }
     }
 
     // Sorting collision candidates in accending order of distance to current vehicle.
     std::sort(collision_candidate_ids.begin(), collision_candidate_ids.end(),
-              [this, &ego_location](const ActorId &a_id_1, const ActorId &a_id_2) {
-                const cg::Location &e_loc = ego_location;
-                const cg::Location &loc_1 = simulation_state.GetLocation(a_id_1);
-                const cg::Location &loc_2 = simulation_state.GetLocation(a_id_2);
-                return (cg::Math::DistanceSquared(e_loc, loc_1) < cg::Math::DistanceSquared(e_loc, loc_2));
+              [this, &actor_location](const ActorId &a_id_1, const ActorId &a_id_2) {
+                const cg::Location &loc_1 = alsm.ActorInfo(a_id_1).kinematic_state.location;
+                const cg::Location &loc_2 = alsm.ActorInfo(a_id_2).kinematic_state.location;
+                return (cg::Math::DistanceSquared(actor_location, loc_1) < cg::Math::DistanceSquared(actor_location, loc_2));
               });
 
     // Check every actor in the vicinity if it poses a collision hazard.
@@ -73,19 +74,18 @@ void CollisionStage::Update(const unsigned long index) {
          iter != collision_candidate_ids.end() && !collision_hazard;
          ++iter) {
       const ActorId other_actor_id = *iter;
-      const ActorType other_actor_type = simulation_state.GetType(other_actor_id);
+      const ActorType other_actor_type = alsm.ActorInfo(other_actor_id).static_attributes.actor_type;
 
-      if (parameters.GetCollisionDetection(ego_actor_id, other_actor_id)
-          && buffer_map.find(ego_actor_id) != buffer_map.end()
-          && simulation_state.ContainsActor(other_actor_id)) {
-        std::pair<bool, float> negotiation_result = NegotiateCollision(ego_actor_id,
+      if (parameters.GetCollisionDetection(actor_id, other_actor_id)
+          && buffer_map.find(actor_id) != buffer_map.end()) {
+        std::pair<bool, float> negotiation_result = NegotiateCollision(actor_id,
                                                                        other_actor_id,
                                                                        look_ahead_index);
         if (negotiation_result.first) {
           if ((other_actor_type == ActorType::Vehicle
-               && parameters.GetPercentageIgnoreVehicles(ego_actor_id) <= random_devices.at(ego_actor_id).next())
+               && parameters.GetPercentageIgnoreVehicles(actor_id) <= random_devices.at(actor_id).next())
               || (other_actor_type == ActorType::Pedestrian
-                  && parameters.GetPercentageIgnoreWalkers(ego_actor_id) <= random_devices.at(ego_actor_id).next())) {
+                  && parameters.GetPercentageIgnoreWalkers(actor_id) <= random_devices.at(actor_id).next())) {
             collision_hazard = true;
             obstacle_id = other_actor_id;
             available_distance_margin = negotiation_result.second;
@@ -95,7 +95,7 @@ void CollisionStage::Update(const unsigned long index) {
     }
   }
 
-  CollisionHazardData &output_element = output_array.at(index);
+  CollisionHazardData &output_element = output_array.at(actor_id);
   output_element.hazard_actor_id = obstacle_id;
   output_element.hazard = collision_hazard;
   output_element.available_distance_margin = available_distance_margin;
@@ -111,7 +111,8 @@ void CollisionStage::Reset() {
 
 float CollisionStage::GetBoundingBoxExtention(const ActorId actor_id) {
 
-  const float velocity = cg::Math::Dot(simulation_state.GetVelocity(actor_id), simulation_state.GetHeading(actor_id));
+  const float velocity = cg::Math::Dot(alsm.ActorInfo(actor_id).kinematic_state.velocity,
+                                       alsm.ActorInfo().rotation.GetForwardVector()));
   float bbox_extension;
   // Using a linear function to calculate boundary length.
   bbox_extension = BOUNDARY_EXTENSION_RATE * velocity + BOUNDARY_EXTENSION_MINIMUM;
@@ -130,16 +131,20 @@ float CollisionStage::GetBoundingBoxExtention(const ActorId actor_id) {
 }
 
 LocationVector CollisionStage::GetBoundary(const ActorId actor_id) {
-  const ActorType actor_type = simulation_state.GetType(actor_id);
-  const cg::Vector3D heading_vector = simulation_state.GetHeading(actor_id);
+  const FastALSM::Info& info = alsm.ActorInfo(actor_id);
+
+  const ActorType actor_type = info.static_attributes.actor_type;
+  const cg::Vector3D heading_vector = info.kinematic_state.rotation.GetForwardVector();
 
   float forward_extension = 0.0f;
-  if (actor_type == ActorType::Pedestrian) {
+  if (info.static_attributes.actor_type == ActorType::Pedestrian) {
     // Extend the pedestrians bbox to "predict" where they'll be and avoid collisions.
-    forward_extension = simulation_state.GetVelocity(actor_id).Length() * WALKER_TIME_EXTENSION;
+    forward_extension = info.kinematic_state.velocity.Length() * WALKER_TIME_EXTENSION;
   }
 
-  cg::Vector3D dimensions = simulation_state.GetDimensions(actor_id);
+  cg::Vector3D dimensions = cg::Vector3D(info.static_attributes.half_length,
+                                         info.static_attributes.half_width,
+                                         info.static_attributes.half_height);
 
   float bbox_x = dimensions.x;
   float bbox_y = dimensions.y;
@@ -149,7 +154,7 @@ LocationVector CollisionStage::GetBoundary(const ActorId actor_id) {
   const cg::Vector3D y_boundary_vector = perpendicular_vector * (bbox_y + forward_extension);
 
   // Four corners of the vehicle in top view clockwise order (left-handed system).
-  const cg::Location location = simulation_state.GetLocation(actor_id);
+  const cg::Location location = info.kinematic_state.location;
   LocationVector bbox_boundary = {
       location + cg::Location(x_boundary_vector - y_boundary_vector),
       location + cg::Location(-1.0f * x_boundary_vector - y_boundary_vector),
@@ -176,7 +181,12 @@ LocationVector CollisionStage::GetGeodesicBoundary(const ActorId actor_id) {
 
       LocationVector left_boundary;
       LocationVector right_boundary;
-      cg::Vector3D dimensions = simulation_state.GetDimensions(actor_id);
+
+      const FastALSM::Info& info = alsm.ActorInfo(actor_id);
+      cg::Vector3D dimensions = cg::Vector3D(info.static_attributes.half_length,
+                                             info.static_attributes.half_width,
+                                             info.static_.attributes.half_height);
+
       const float width = dimensions.y;
       const float length = dimensions.x;
 
@@ -300,23 +310,26 @@ std::pair<bool, float> CollisionStage::NegotiateCollision(const ActorId referenc
   bool hazard = false;
   float available_distance_margin = std::numeric_limits<float>::infinity();
 
-  const cg::Location reference_location = simulation_state.GetLocation(reference_vehicle_id);
-  const cg::Location other_location = simulation_state.GetLocation(other_actor_id);
+  const FastALSM::Info& reference_info = alsm.ActorInfo(reference_vehicle_id);
+  const FastALSM::Info& other_info = alsm.ActorInfo(other_actor_id);
+
+  const cg::Location reference_location = reference_info.kinematic_state.location;
+  const cg::Location other_location = other_info.kinematic_state.location;
 
   // Ego and other vehicle heading.
-  const cg::Vector3D reference_heading = simulation_state.GetHeading(reference_vehicle_id);
+  const cg::Vector3D reference_heading = reference_info.kinematic_state.rotation.GetForwardVector();
   // Vector from ego position to position of the other vehicle.
   cg::Vector3D reference_to_other = other_location - reference_location;
   reference_to_other = reference_to_other.MakeSafeUnitVector(EPSILON);
 
   // Other vehicle heading.
-  const cg::Vector3D other_heading = simulation_state.GetHeading(other_actor_id);
+  const cg::Vector3D other_heading = other_info.kinematic_state.rotation.GetForwardVector();
   // Vector from other vehicle position to ego position.
   cg::Vector3D other_to_reference = reference_location - other_location;
   other_to_reference = other_to_reference.MakeSafeUnitVector(EPSILON);
 
-  float reference_vehicle_length = simulation_state.GetDimensions(reference_vehicle_id).x * SQUARE_ROOT_OF_TWO;
-  float other_vehicle_length = simulation_state.GetDimensions(other_actor_id).x * SQUARE_ROOT_OF_TWO;
+  float reference_vehicle_length = reference_info.static_attributes.half_length * SQUARE_ROOT_OF_TWO;
+  float other_vehicle_length = other_info.static_attributes.half_length * SQUARE_ROOT_OF_TWO;
 
   float inter_vehicle_distance = cg::Math::DistanceSquared(reference_location, other_location);
   float ego_bounding_box_extension = GetBoundingBoxExtention(reference_vehicle_id);
@@ -334,7 +347,8 @@ std::pair<bool, float> CollisionStage::NegotiateCollision(const ActorId referenc
   const Buffer &reference_vehicle_buffer = buffer_map.at(reference_vehicle_id);
   SimpleWaypointPtr closest_point = reference_vehicle_buffer.front();
   bool ego_inside_junction = closest_point->CheckJunction();
-  TrafficLightState reference_tl_state = simulation_state.GetTLS(reference_vehicle_id);
+
+  TrafficLightState reference_tl_state = reference_info.traffic_light_state;
   bool ego_at_traffic_light = reference_tl_state.at_traffic_light;
   bool ego_stopped_by_light = reference_tl_state.tl_state != TLS::Green && reference_tl_state.tl_state != TLS::Off;
   SimpleWaypointPtr look_ahead_point = reference_vehicle_buffer.at(reference_junction_look_ahead_index);

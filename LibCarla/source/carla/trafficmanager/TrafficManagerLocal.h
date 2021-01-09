@@ -29,6 +29,7 @@
 #include "carla/trafficmanager/TrafficManagerServer.h"
 
 #include "carla/trafficmanager/ALSM.h"
+#include "carla/trafficmanager/FastALSM.h"
 #include "carla/trafficmanager/LocalizationStage.h"
 #include "carla/trafficmanager/CollisionStage.h"
 #include "carla/trafficmanager/TrafficLightStage.h"
@@ -267,12 +268,14 @@ protected:
     // and resets force_lane_change and and keep_right of this
     ActorInfo update_and_reset(const GlobalParameters & global);
   };
-  
+
   std::mutex actor_info_mutex;
   std::unordered_map<ActorId, std::shared_ptr<ActorInfo> > actor_info;
+  unsigned long num_actors = 0u;
+
   std::shared_ptr<ActorInfo> GetActorInfo(const ActorPtr &actor);
-  
-  
+
+
 public:
   /// To start the traffic manager.
   virtual void Start();
@@ -374,7 +377,7 @@ public:
 protected:
   /// Traffic manager server instance.
   TrafficManagerServer server;
-  
+
   /// Switch to turn on / turn off traffic manager.
   std::atomic<bool> run_traffic_manger{true};
   /// Flags to signal step begin and end.
@@ -392,6 +395,19 @@ protected:
 
 protected: // ALSM
   FastALSM alsm;
+
+protected: // Traffic components
+  LocalizationStage localization_stage;
+  LocalizationFrame localization_frame;
+
+  CollisionFrame collision_frame;
+  CollisionStage collision_stage;
+
+  TLFrame tl_frame;
+  TrafficLightStage traffic_light_stage;
+
+  ControlFrame control_frame;
+  MotionPlanStage motion_plan_stage;
 };
 
 } // namespace traffic_manager

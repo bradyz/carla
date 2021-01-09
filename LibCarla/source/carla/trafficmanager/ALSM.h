@@ -110,43 +110,5 @@ public:
   void Reset();
 };
 
-
-/// ALSM: Agent Lifecycle and State Managerment
-/// This class has functionality to update the local cache of kinematic states
-/// and manage memory and cleanup for varying number of vehicles in the simulation.
-class FastALSM {
-public:
-  struct Info {
-    bool alive = true;
-    bool registered = false;
-    double idle_time = 0.f;
-    bool remove = false;
-    bool static_attributes_set = false;
-    KinematicState kinematic_state;
-    TrafficLightState traffic_light_state;
-    StaticAttributes static_attributes;
-    bool IsStuck(double elapsed_seconds) const;
-  };
-private:
-  std::unordered_map<ActorId, Info> actor_info;
-  
-  // Time elapsed since last vehicle destruction due to being idle for too long.
-  double elapsed_last_actor_destruction {0.0};
-
-public:
-  FastALSM();
-
-  void Update(cc::World & world);
-
-  // Removes an actor from traffic manager and performs clean up of associated data
-  // from various stages tracking the said vehicle.
-  const Info & ActorInfo(const ActorId actor_id) const;
-
-  void Register(const ActorId actor_id);
-  void Unregister(const ActorId actor_id);
-
-  void Reset();
-};
-
 } // namespace traffic_manager
 } // namespace carla

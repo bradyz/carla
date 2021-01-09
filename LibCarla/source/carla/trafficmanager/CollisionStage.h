@@ -15,6 +15,7 @@
 #include "carla/trafficmanager/RandomGenerator.h"
 #include "carla/trafficmanager/SimulationState.h"
 #include "carla/trafficmanager/Stage.h"
+#include "carla/trafficmanager/FastALSM.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -46,13 +47,13 @@ using Polygon = bg::model::polygon<bg::model::d2::point_xy<double>>;
 /// This class has functionality to detect potential collision with a nearby actor.
 class CollisionStage : Stage {
 private:
-  const std::vector<ActorId> &vehicle_id_list;
-  const SimulationState &simulation_state;
+  const FastALSM &alsm;
   const BufferMap &buffer_map;
   const TrackTraffic &track_traffic;
   const Parameters &parameters;
   CollisionFrame &output_array;
   cc::DebugHelper &debug_helper;
+
   // Structure keeping track of blocking lead vehicles.
   CollisionLockMap collision_locks;
   // Structures to cache geodesic boundaries of vehicle and
@@ -87,8 +88,7 @@ private:
   void DrawBoundary(const LocationVector &boundary);
 
 public:
-  CollisionStage(const std::vector<ActorId> &vehicle_id_list,
-                 const SimulationState &simulation_state,
+  CollisionStage(const FastALSM &alsm,
                  const BufferMap &buffer_map,
                  const TrackTraffic &track_traffic,
                  const Parameters &parameters,
@@ -96,7 +96,7 @@ public:
                  cc::DebugHelper& debug_helper,
                  RandomGeneratorMap &random_devices);
 
-  void Update (const unsigned long index) override;
+  void Update (const ActorId actor_id) override;
 
   void RemoveActor(const ActorId actor_id) override;
 

@@ -41,9 +41,9 @@ struct LocalizationData {
 using LocalizationFrame = std::vector<LocalizationData>;
 
 struct CollisionHazardData {
+  bool hazard;
   float available_distance_margin;
   ActorId hazard_actor_id;
-  bool hazard;
 };
 using CollisionFrame = std::vector<CollisionHazardData>;
 
