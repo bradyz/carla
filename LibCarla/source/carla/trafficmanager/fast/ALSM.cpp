@@ -33,7 +33,7 @@ void FastALSM::Update(cc::World & world) {
     auto i = actor_info.find(actor_ptr->GetId());
     // Create a new actor if it doesn't exist
     if (i == actor_info.end())
-      i = actor_info.insert({actor_ptr->GetId(), ActorState()}).first;
+      i = actor_info.insert({actor_ptr->GetId(), ActorState{actor_ptr->GetId()}}).first;
     auto &info = i->second;
     info.alive = true;
 
@@ -133,18 +133,18 @@ void FastALSM::Reset() {
 //    i->second.remove = true;
 //}
 
-const ActorState & FastALSM::ActorInfo(const ActorId actor_id) const {
+const ActorState & FastALSM::GetState(const ActorId actor_id) const {
   auto i = actor_info.find(actor_id);
   if (i != actor_info.end())
     return i->second;
-  static const ActorState no_info{false, false};
+  static const ActorState no_info{0u, false, false};
   return no_info;
 }
-ActorState & FastALSM::ActorInfo(const ActorId actor_id) {
+ActorState & FastALSM::GetState(const ActorId actor_id) {
   auto i = actor_info.find(actor_id);
   if (i != actor_info.end())
     return i->second;
-  static ActorState no_info{false, false};
+  static ActorState no_info{0u, false, false};
   return no_info;
 }
 
@@ -153,7 +153,7 @@ void FastALSM::Register(const ActorId actor_id) {
   if (i != actor_info.end())
     i->second.registered = true;
   else
-    actor_info[actor_id] = {false, true};
+    actor_info[actor_id] = {actor_id, false, true};
 }
 void FastALSM::Unregister(const ActorId actor_id) {
   auto i = actor_info.find(actor_id);

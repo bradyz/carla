@@ -7,7 +7,9 @@
 
 #include "carla/trafficmanager/SnippetProfiler.h"
 #include "carla/trafficmanager/fast/TrafficManagerLocal.h"
+#include "carla/trafficmanager/fast/Collision.h"
 #include "carla/trafficmanager/fast/Localization.h"
+#include "carla/trafficmanager/fast/TrafficLight.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -144,7 +146,18 @@ void FastTrafficManagerLocal::SetGlobalPercentageSpeedDifference(float const per
 }
 
 /// Method to set collision detection rules between vehicles.
-void FastTrafficManagerLocal::SetCollisionDetection(const ActorPtr &reference_actor, const ActorPtr &other_actor, const bool detect_collision) { /* TODO */ }
+void FastTrafficManagerLocal::SetCollisionDetection(const ActorPtr &reference_actor, const ActorPtr &other_actor,
+                                                    const bool detect_collision) {
+  auto p1 = GetActorParameters(reference_actor);
+  auto p2 = GetActorParameters(other_actor);
+  if (detect_collision) {
+    p1->cannot_collide.erase(other_actor->GetId());
+    p2->cannot_collide.erase(reference_actor->GetId());
+  } else {
+    p1->cannot_collide.insert(other_actor->GetId());
+    p2->cannot_collide.insert(reference_actor->GetId());
+  }
+}
 
 void FastTrafficManagerLocal::SetForceLaneChange(const ActorPtr &actor, const bool direction) {
   GetActorParameters(actor)->force_lane_change = {true, direction};
@@ -243,7 +256,8 @@ void FastTrafficManagerLocal::Run() {
   auto local_map = std::make_shared<InMemoryMap>(world.GetMap());
   local_map->SetUp();
 
-  FastLocalizationStage localization_stage = FastLocalizationStage(local_map);
+  FastLocalizationStage localization_stage = FastLocalizationStage(alsm, local_map);
+  FastTrafficLightStage traffic_light_stage = FastTrafficLightStage(alsm, world);
 
   TIMER("FastTrafficManagerLocal");
   while (run_traffic_manger.load()) {
@@ -279,15 +293,19 @@ void FastTrafficManagerLocal::Run() {
     }
 
     // Run core operation stages.
+    for (const  auto & p: updated_actor_parameters)
+      localization_stage.Update(p.first, p.second, global_parameters);
+    TOC("localization_stage");
+
+    FastCollisionStage collision_stage(alsm, localization_stage.GetTrackTraffic());
+    for (const  auto & p: updated_actor_parameters)
+      collision_stage.Update(p.first, p.second, global_parameters);
+    TOC("collision_stage");
+
     for (const  auto & p: updated_actor_parameters) {
-      localization_stage.Update(p.first, alsm.ActorInfo(p.first), p.second, global_parameters);
+      traffic_light_stage.Update(p.first, p.second, global_parameters);
     }
-//    TOC("localization_stage");
-//    for (unsigned long index = 0u; index < n_vehicles; ++index) {
-//      collision_stage.Update(index);
-//    }
-//    collision_stage.ClearCycleCache();
-//    TOC("collision_stage");
+
 //
 //    for (unsigned long index = 0u; index < n_vehicles; ++index) {
 //      traffic_light_stage.Update(index);

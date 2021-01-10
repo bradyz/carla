@@ -62,6 +62,10 @@ struct ActorParameters {
   float percentage_running_light = 0.f;
   float percentage_running_sign = 0.f;
   float percentage_keep_right = -1.f;
+  std::unordered_set<ActorId> cannot_collide;
+  bool CanCollide(ActorId other) const {
+    return !cannot_collide.count(other);
+  }
 
   // Returns an ActorParameters with default values for unset variables
   // and resets force_lane_change and and keep_right of this
@@ -83,10 +87,10 @@ protected:
   GlobalParameters global_parameters;
 
   std::mutex actor_parameters_mutex;
-  std::unordered_map <ActorId, std::shared_ptr<ActorParameters>> actor_parameters;
+  std::unordered_map<ActorId, std::shared_ptr<ActorParameters>> actor_parameters;
   unsigned long num_actors = 0u;
 
-  std::shared_ptr <ActorParameters> GetActorParameters(const ActorPtr &actor);
+  std::shared_ptr<ActorParameters> GetActorParameters(const ActorPtr &actor);
 
 
 public:

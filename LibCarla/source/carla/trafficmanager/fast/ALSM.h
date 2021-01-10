@@ -27,8 +27,16 @@ namespace chr = std::chrono;
 namespace cg = carla::geom;
 namespace cc = carla::client;
 
+
 struct ActorState {
+  struct CollisionLock {
+    float distance_to_lead_vehicle = std::numeric_limits<float>::infinity();
+    float initial_lock_distance = std::numeric_limits<float>::infinity();
+    ActorId lead_vehicle_id = 0u;
+  };
+
   // ALSM State
+  ActorId id;
   bool alive = true;
   bool registered = false;
   double idle_time = 0.f;
@@ -42,7 +50,14 @@ struct ActorState {
 
   // Localization State
   LocalizationData localization =  {nullptr, nullptr, false};
-  Buffer buffer;
+  Buffer buffer = {};
+
+  // Collision state
+  CollisionHazardData collision = {std::numeric_limits<float>::infinity(), 0, false};
+  CollisionLock collision_lock = {};
+
+  // TrafficLight state
+  bool traffic_light_hazard = false;
 };
 
 class FastALSM {
@@ -61,8 +76,8 @@ public:
 //  void RequestRemove(const ActorId actor_id) const;
 
   // from various stages tracking the said vehicle.
-  const ActorState & ActorInfo(const ActorId actor_id) const;
-  ActorState & ActorInfo(const ActorId actor_id);
+  const ActorState & GetState(const ActorId actor_id) const;
+  ActorState & GetState(const ActorId actor_id);
 
   void Register(const ActorId actor_id);
   void Unregister(const ActorId actor_id);

@@ -11,15 +11,16 @@ using namespace constants::PathBufferUpdate;
 using namespace constants::LaneChange;
 using namespace constants::WaypointSelection;
 
-FastLocalizationStage::FastLocalizationStage(LocalMapPtr local_map):local_map(local_map) {
+FastLocalizationStage::FastLocalizationStage(FastALSM & alsm, LocalMapPtr local_map):alsm(alsm), local_map(local_map) {
 }
 
 void FastLocalizationStage::Update(ActorId actor_id,
-                                   ActorState & state,
                                    const ActorParameters & parameters,
                                    const GlobalParameters & global_parameters) {
-  const auto & kinematic_state = state.kinematic_state;
+  auto & state = alsm.GetState(actor_id);
 
+  // Update the kinematic_state
+  const auto & kinematic_state = state.kinematic_state;
   const cg::Location & vehicle_location = kinematic_state.location;
   const cg::Vector3D & heading_vector = kinematic_state.rotation.GetForwardVector();
   const cg::Vector3D & vehicle_velocity_vector = kinematic_state.velocity;
@@ -29,11 +30,7 @@ void FastLocalizationStage::Update(ActorId actor_id,
   float horizon_length = std::min(vehicle_speed * HORIZON_RATE + MINIMUM_HORIZON_LENGTH, MAXIMUM_HORIZON_LENGTH);
   const float horizon_square = SQUARE(horizon_length);
 
-  if (buffer_map.find(actor_id) == buffer_map.end()) {
-    buffer_map.insert({actor_id, Buffer()});
-  }
-
-  Buffer &waypoint_buffer = buffer_map.at(actor_id);
+  Buffer &waypoint_buffer = state.buffer;
 
   // Clear buffer if vehicle is too far from the first waypoint in the buffer.
   if (!waypoint_buffer.empty() &&
@@ -114,7 +111,7 @@ void FastLocalizationStage::Update(ActorId actor_id,
       && front_waypoint_not_junction
       && (recently_not_executed_lane_change || done_with_previous_lane_change)) {
 
-    SimpleWaypointPtr change_over_point = AssignLaneChange(actor_id, vehicle_location, vehicle_speed,
+    SimpleWaypointPtr change_over_point = AssignLaneChange(state, vehicle_location, vehicle_speed,
                                                            force_lane_change, lane_change_direction);
 
     if (change_over_point != nullptr) {
@@ -164,7 +161,7 @@ void FastLocalizationStage::Update(ActorId actor_id,
     PushWaypoint(actor_id, track_traffic, waypoint_buffer, next_wp_selection);
   }
 
-  ExtendAndFindSafeSpace(actor_id, is_at_junction_entrance, waypoint_buffer);
+  ExtendAndFindSafeSpace(state, is_at_junction_entrance, waypoint_buffer);
 
   // Editing output array
   state.localization.is_at_junction_entrance = is_at_junction_entrance;
@@ -183,15 +180,15 @@ void FastLocalizationStage::Update(ActorId actor_id,
 }
 
 
-void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
-                                               const bool is_at_junction_entrance,
-                                               Buffer &waypoint_buffer) {
+void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorState & state,
+                                                   const bool is_at_junction_entrance,
+                                                   Buffer &waypoint_buffer) {
 
   SimpleWaypointPtr junction_end_point = nullptr;
   SimpleWaypointPtr safe_point_after_junction = nullptr;
 
   if (is_at_junction_entrance
-      && vehicles_at_junction_entrance.find(actor_id) == vehicles_at_junction_entrance.end()) {
+      && vehicles_at_junction_entrance.find(state.id) == vehicles_at_junction_entrance.end()) {
 
     bool entered_junction = false;
     bool past_junction = false;
@@ -225,7 +222,7 @@ void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
         NodeList next_waypoints = current_waypoint->GetNextWaypoint();
         if (!next_waypoints.empty()) {
           current_waypoint = next_waypoints.front();
-          PushWaypoint(actor_id, track_traffic, waypoint_buffer, current_waypoint);
+          PushWaypoint(state.id, track_traffic, waypoint_buffer, current_waypoint);
           if (!current_waypoint->CheckJunction()) {
             past_junction = true;
             junction_end_point = current_waypoint;
@@ -246,7 +243,7 @@ void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
         } else {
           if (!next_waypoints.empty()) {
             current_waypoint = next_waypoints.front();
-            PushWaypoint(actor_id, track_traffic, waypoint_buffer, current_waypoint);
+            PushWaypoint(state.id, track_traffic, waypoint_buffer, current_waypoint);
           } else {
             abort = true;
           }
@@ -262,12 +259,12 @@ void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
       safe_point_after_junction = nullptr;
     }
 
-    vehicles_at_junction_entrance.insert({actor_id, {junction_end_point, safe_point_after_junction}});
+    vehicles_at_junction_entrance.insert({state.id, {junction_end_point, safe_point_after_junction}});
   }
   else if (!is_at_junction_entrance
-           && vehicles_at_junction_entrance.find(actor_id) != vehicles_at_junction_entrance.end()) {
+           && vehicles_at_junction_entrance.find(state.id) != vehicles_at_junction_entrance.end()) {
 
-    vehicles_at_junction_entrance.erase(actor_id);
+    vehicles_at_junction_entrance.erase(state.id);
   }
 }
 
@@ -276,17 +273,17 @@ void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
 //  last_lane_change_location.erase(actor_id);
 //}
 
-SimpleWaypointPtr FastLocalizationStage::AssignLaneChange(const ActorId actor_id,
-                                                      const cg::Location vehicle_location,
-                                                      const float vehicle_speed,
-                                                      bool force, bool direction) {
+SimpleWaypointPtr FastLocalizationStage::AssignLaneChange(const ActorState & state,
+                                                          const cg::Location vehicle_location,
+                                                          const float vehicle_speed,
+                                                          bool force, bool direction) {
 
   // Waypoint representing the new starting point for the waypoint buffer
   // due to lane change. Remains nullptr if lane change not viable.
   SimpleWaypointPtr change_over_point = nullptr;
 
   // Retrieve waypoint buffer for current vehicle.
-  const Buffer &waypoint_buffer = buffer_map.at(actor_id);
+  const Buffer &waypoint_buffer = state.buffer;
 
   // Check buffer is not empty.
   if (!waypoint_buffer.empty()) {
@@ -296,7 +293,7 @@ SimpleWaypointPtr FastLocalizationStage::AssignLaneChange(const ActorId actor_id
     const SimpleWaypointPtr right_waypoint = current_waypoint->GetRightWaypoint();
 
     // Retrieve vehicles with overlapping waypoint buffers with current vehicle.
-    const auto blocking_vehicles = track_traffic.GetOverlappingVehicles(actor_id);
+    const auto blocking_vehicles = track_traffic.GetOverlappingVehicles(state.id);
 
     // Find immediate in-lane obstacle and check if any are too close to initiate lane change.
     bool obstacle_too_close = false;
@@ -307,8 +304,10 @@ SimpleWaypointPtr FastLocalizationStage::AssignLaneChange(const ActorId actor_id
          ++i) {
       const ActorId &other_actor_id = *i;
       // Find vehicle in buffer map and check if it's buffer is not empty.
-      if (buffer_map.find(other_actor_id) != buffer_map.end() && !buffer_map.at(other_actor_id).empty()) {
-        const Buffer &other_buffer = buffer_map.at(other_actor_id);
+
+      const ActorState & other_state = alsm.GetState(other_actor_id);
+      if (other_state.alive && other_state.registered && !other_state.buffer.empty()) {
+        const Buffer &other_buffer = other_state.buffer;
         const SimpleWaypointPtr &other_current_waypoint = other_buffer.front();
         const cg::Location other_location = other_current_waypoint->GetLocation();
 
@@ -344,7 +343,7 @@ SimpleWaypointPtr FastLocalizationStage::AssignLaneChange(const ActorId actor_id
 
     // If a valid immediate obstacle found.
     if (!obstacle_too_close && obstacle_actor_id != 0u && !force) {
-      const Buffer &other_buffer = buffer_map.at(obstacle_actor_id);
+      const Buffer &other_buffer = alsm.GetState(obstacle_actor_id).buffer;
       const SimpleWaypointPtr &other_current_waypoint = other_buffer.front();
       const auto other_neighbouring_lanes = {other_current_waypoint->GetLeftWaypoint(),
                                              other_current_waypoint->GetRightWaypoint()};
