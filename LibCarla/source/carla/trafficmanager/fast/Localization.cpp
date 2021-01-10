@@ -1,6 +1,8 @@
+#include "carla/trafficmanager/fast/Localization.h"
+#include "carla/trafficmanager/fast/TrafficManagerLocal.h"
 #include "carla/trafficmanager/Constants.h"
+#include "carla/trafficmanager/LocalizationUtils.h"
 
-#include "carla/trafficmanager/LocalizationStage.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -9,34 +11,18 @@ using namespace constants::PathBufferUpdate;
 using namespace constants::LaneChange;
 using namespace constants::WaypointSelection;
 
-LocalizationStage::LocalizationStage(
-  const std::vector<ActorId> &vehicle_id_list,
-  BufferMap &buffer_map,
-  const SimulationState &simulation_state,
-  TrackTraffic &track_traffic,
-  const LocalMapPtr &local_map,
-  Parameters &parameters,
-  std::vector<ActorId>& marked_for_removal,
-  LocalizationFrame &output_array,
-  cc::DebugHelper &debug_helper,
-  RandomGeneratorMap &random_devices)
-  : vehicle_id_list(vehicle_id_list),
-    buffer_map(buffer_map),
-    simulation_state(simulation_state),
-    track_traffic(track_traffic),
-    local_map(local_map),
-    parameters(parameters),
-    marked_for_removal(marked_for_removal),
-    output_array(output_array),
-    debug_helper(debug_helper),
-    random_devices(random_devices) {}
+FastLocalizationStage::FastLocalizationStage(LocalMapPtr local_map):local_map(local_map) {
+}
 
-void LocalizationStage::Update(const unsigned long index) {
+void FastLocalizationStage::Update(ActorId actor_id,
+                                   ActorState & state,
+                                   const ActorParameters & parameters,
+                                   const GlobalParameters & global_parameters) {
+  const auto & kinematic_state = state.kinematic_state;
 
-  const ActorId actor_id = vehicle_id_list.at(index);
-  const cg::Location vehicle_location = simulation_state.GetLocation(actor_id);
-  const cg::Vector3D heading_vector = simulation_state.GetHeading(actor_id);
-  const cg::Vector3D vehicle_velocity_vector = simulation_state.GetVelocity(actor_id);
+  const cg::Location & vehicle_location = kinematic_state.location;
+  const cg::Vector3D & heading_vector = kinematic_state.rotation.GetForwardVector();
+  const cg::Vector3D & vehicle_velocity_vector = kinematic_state.velocity;
   const float vehicle_speed = vehicle_velocity_vector.Length();
 
   // Speed dependent waypoint horizon length.
@@ -100,13 +86,13 @@ void LocalizationStage::Update(const unsigned long index) {
   }
 
   // Assign a lane change.
-  const ChangeLaneInfo lane_change_info = parameters.GetForceLaneChange(actor_id);
+  const ChangeLaneInfo lane_change_info = parameters.force_lane_change;
   bool force_lane_change = lane_change_info.change_lane;
   bool lane_change_direction = lane_change_info.direction;
 
   if (!force_lane_change) {
-    float perc_keep_right = parameters.GetKeepRightPercentage(actor_id);
-    if (perc_keep_right >= 0.0f && perc_keep_right >= random_devices.at(actor_id).next()) {
+    float perc_keep_right = parameters.percentage_keep_right;
+    if (perc_keep_right >= 0.0f && perc_keep_right >= state.random_device.next()) {
       force_lane_change = true;
       lane_change_direction = true;
     }
@@ -121,7 +107,7 @@ void LocalizationStage::Update(const unsigned long index) {
     float distance_frm_previous = cg::Math::DistanceSquared(last_lane_change_location.at(actor_id), vehicle_location);
     done_with_previous_lane_change = distance_frm_previous > lane_change_distance;
   }
-  bool auto_or_force_lane_change = parameters.GetAutoLaneChange(actor_id) || force_lane_change;
+  bool auto_or_force_lane_change = parameters.auto_lane_change || force_lane_change;
   bool front_waypoint_not_junction = !front_waypoint->CheckJunction();
 
   if (auto_or_force_lane_change
@@ -164,14 +150,14 @@ void LocalizationStage::Update(const unsigned long index) {
                                                             b->GetLocation());
                   return a_x_product < b_x_product;
                 });
-      double r_sample = random_devices.at(actor_id).next();
+      double r_sample = state.random_device.next();
       double s_bucket = 100.0 / next_waypoints.size();
       selection_index = static_cast<uint64_t>(std::floor(r_sample/s_bucket));
     } else if (next_waypoints.size() == 0) {
-      if (!parameters.GetOSMMode()) {
+      if (!global_parameters.osm_mode) {
         std::cout << "This map has dead-end roads, please change the set_open_street_map parameter to true" << std::endl;
       }
-      marked_for_removal.push_back(actor_id);
+      state.remove = true;
       break;
     }
     SimpleWaypointPtr next_wp_selection = next_waypoints.at(selection_index);
@@ -181,23 +167,23 @@ void LocalizationStage::Update(const unsigned long index) {
   ExtendAndFindSafeSpace(actor_id, is_at_junction_entrance, waypoint_buffer);
 
   // Editing output array
-  LocalizationData &output = output_array.at(index);
-  output.is_at_junction_entrance = is_at_junction_entrance;
+  state.localization.is_at_junction_entrance = is_at_junction_entrance;
 
   if (is_at_junction_entrance) {
     const SimpleWaypointPair &safe_space_end_points = vehicles_at_junction_entrance.at(actor_id);
-    output.junction_end_point = safe_space_end_points.first;
-    output.safe_point = safe_space_end_points.second;
+    state.localization.junction_end_point = safe_space_end_points.first;
+    state.localization.safe_point = safe_space_end_points.second;
   } else {
-    output.junction_end_point = nullptr;
-    output.safe_point = nullptr;
+    state.localization.junction_end_point = nullptr;
+    state.localization.safe_point = nullptr;
   }
 
   // Updating geodesic grid position for actor.
   track_traffic.UpdateGridPosition(actor_id, waypoint_buffer);
 }
 
-void LocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
+
+void FastLocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
                                                const bool is_at_junction_entrance,
                                                Buffer &waypoint_buffer) {
 
@@ -285,17 +271,12 @@ void LocalizationStage::ExtendAndFindSafeSpace(const ActorId actor_id,
   }
 }
 
-void LocalizationStage::RemoveActor(ActorId actor_id) {
-    last_lane_change_location.erase(actor_id);
-//    vehicles_at_junction.erase(actor_id);
-}
+//void FastLocalizationStage::RemoveActor(ActorId actor_id) {
+//  TODO:
+//  last_lane_change_location.erase(actor_id);
+//}
 
-void LocalizationStage::Reset() {
-  last_lane_change_location.clear();
-//  vehicles_at_junction.clear();
-}
-
-SimpleWaypointPtr LocalizationStage::AssignLaneChange(const ActorId actor_id,
+SimpleWaypointPtr FastLocalizationStage::AssignLaneChange(const ActorId actor_id,
                                                       const cg::Location vehicle_location,
                                                       const float vehicle_speed,
                                                       bool force, bool direction) {
@@ -392,7 +373,7 @@ SimpleWaypointPtr LocalizationStage::AssignLaneChange(const ActorId actor_id,
           && track_traffic.GetPassingVehicles(right_waypoint->GetId()).size() == 0) {
         change_over_point = right_waypoint;
       } else if (distant_left_lane_free && left_waypoint != nullptr
-               && track_traffic.GetPassingVehicles(left_waypoint->GetId()).size() == 0) {
+                 && track_traffic.GetPassingVehicles(left_waypoint->GetId()).size() == 0) {
         change_over_point = left_waypoint;
       }
     } else if (force) {
@@ -414,22 +395,6 @@ SimpleWaypointPtr LocalizationStage::AssignLaneChange(const ActorId actor_id,
   }
 
   return change_over_point;
-}
-
-void LocalizationStage::DrawBuffer(Buffer &buffer) {
-  uint64_t buffer_size = buffer.size();
-  uint64_t step_size = std::max(buffer_size/20u, static_cast<uint64_t>(1));
-  cc::DebugHelper::Color color {0u, 0u, 0u};
-  cg::Location two_meters_up = cg::Location(0.0f, 0.0f, 2.0f);
-  for (uint64_t i = 0u; i + step_size < buffer_size; i += step_size) {
-    if (!buffer.at(i)->CheckJunction() && !buffer.at(i + step_size)->CheckJunction()) {
-      color.g = 255u;
-    }
-    debug_helper.DrawLine(buffer.at(i)->GetLocation() + two_meters_up,
-                          buffer.at(i + step_size)->GetLocation() + two_meters_up,
-                          0.2f, color, 0.05f);
-    color = {0u, 0u, 0u};
-  }
 }
 
 } // namespace traffic_manager

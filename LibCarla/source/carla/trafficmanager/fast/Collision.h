@@ -43,9 +43,9 @@ using GeodesicBoundaryMap = std::unordered_map<ActorId, LocationVector>;
 using GeometryComparisonMap = std::unordered_map<uint64_t, GeometryComparison>;
 using Polygon = bg::model::polygon<bg::model::d2::point_xy<double>>;
 
-/// This class has functionality to detect potential collision with a nearby actor.
-class CollisionStage : Stage {
-private:
+
+class FastCollisionStage {
+
   const std::vector<ActorId> &vehicle_id_list;
   const SimulationState &simulation_state;
   const BufferMap &buffer_map;
@@ -87,20 +87,12 @@ private:
   void DrawBoundary(const LocationVector &boundary);
 
 public:
-  CollisionStage(const std::vector<ActorId> &vehicle_id_list,
-                 const SimulationState &simulation_state,
-                 const BufferMap &buffer_map,
-                 const TrackTraffic &track_traffic,
-                 const Parameters &parameters,
-                 CollisionFrame &output_array,
-                 cc::DebugHelper& debug_helper,
-                 RandomGeneratorMap &random_devices);
+  CollisionStage();
 
-  void Update (const unsigned long index) override;
-
-  void RemoveActor(const ActorId actor_id) override;
-
-  void Reset() override;
+  void Update(ActorId actor_id,
+              ActorState &state,
+              const ActorParameters &parameters,
+              const GlobalParameters &global_parameters);
 
   // Method to flush cache for current update cycle.
   void ClearCycleCache();

@@ -8,7 +8,7 @@
 #include "carla/trafficmanager/LocalizationUtils.h"
 #include "carla/trafficmanager/SimpleWaypoint.h"
 
-#include "carla/trafficmanager/ALSM.h"
+#include "carla/trafficmanager/fast/ALSM.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -33,7 +33,7 @@ void FastALSM::Update(cc::World & world) {
     auto i = actor_info.find(actor_ptr->GetId());
     // Create a new actor if it doesn't exist
     if (i == actor_info.end())
-      i = actor_info.insert({actor_ptr->GetId(), Info()}).first;
+      i = actor_info.insert({actor_ptr->GetId(), ActorState()}).first;
     auto &info = i->second;
     info.alive = true;
 
@@ -114,7 +114,7 @@ void FastALSM::Update(cc::World & world) {
   }
 }
 
-bool FastALSM::Info::IsStuck(double elapsed_seconds) const {
+bool ActorState::IsStuck(double elapsed_seconds) const {
   double delta_idle_time = elapsed_seconds - idle_time;
   return (!traffic_light_state.at_traffic_light
           && traffic_light_state.tl_state != TLS::Red
@@ -127,17 +127,24 @@ void FastALSM::Reset() {
   elapsed_last_actor_destruction = 0.0;
 }
 
-void FastALSM::RequestRemove(const ActorId actor_id) const {
-  auto i = actor_info.find(actor_id);
-  if (i != actor_info.end())
-    i->second.remove = true;
-}
+//void FastALSM::RequestRemove(const ActorId actor_id) const {
+//  auto i = actor_info.find(actor_id);
+//  if (i != actor_info.end())
+//    i->second.remove = true;
+//}
 
-const FastALSM::Info & FastALSM::ActorInfo(const ActorId actor_id) const {
+const ActorState & FastALSM::ActorInfo(const ActorId actor_id) const {
   auto i = actor_info.find(actor_id);
   if (i != actor_info.end())
     return i->second;
-  static const FastALSM::Info no_info{false, false};
+  static const ActorState no_info{false, false};
+  return no_info;
+}
+ActorState & FastALSM::ActorInfo(const ActorId actor_id) {
+  auto i = actor_info.find(actor_id);
+  if (i != actor_info.end())
+    return i->second;
+  static ActorState no_info{false, false};
   return no_info;
 }
 

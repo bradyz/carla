@@ -247,6 +247,7 @@ void ALSM::UpdateRegisteredActorsData(const bool hybrid_physics_mode, ALSM::Idle
 
 void ALSM::UpdateUnregisteredActorsData() {
   for (auto &actor_info: unregistered_actors) {
+
     const ActorId actor_id = actor_info.first;
     const ActorPtr actor_ptr = actor_info.second;
     const std::string type_id = actor_ptr->GetTypeId();

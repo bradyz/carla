@@ -13,6 +13,7 @@
 #include "carla/trafficmanager/TrafficManager.h"
 #include "carla/trafficmanager/TrafficManagerBase.h"
 #include "carla/trafficmanager/TrafficManagerLocal.h"
+#include "carla/trafficmanager/fast/TrafficManagerLocal.h"
 #include "carla/trafficmanager/TrafficManagerRemote.h"
 
 #define DEBUG_PRINT_TM  0

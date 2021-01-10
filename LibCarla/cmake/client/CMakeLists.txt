@@ -244,7 +244,7 @@ file(GLOB libcarla_pugixml_sources
 set(libcarla_sources "${libcarla_sources};${libcarla_pugixml_sources}")
 install(FILES ${libcarla_pugixml_sources} DESTINATION include/pugixml)
 
-file(GLOB libcarla_carla_trafficmanager_sources
+file(GLOB_RECURSE libcarla_carla_trafficmanager_sources
     "${libcarla_source_path}/carla/trafficmanager/*.cpp"
     "${libcarla_source_path}/carla/trafficmanager/*.h")
 set(libcarla_sources "${libcarla_sources};${libcarla_carla_trafficmanager_sources}")
