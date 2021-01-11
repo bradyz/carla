@@ -275,14 +275,6 @@ void FastTrafficManagerLocal::Run() {
     }
     TOC("sync");
 
-    std::unordered_map<ActorId, ActorParameters> updated_actor_parameters;
-    {
-      // Fetch all actor info and apply the global parameters
-      std::lock_guard<std::mutex> lock(actor_parameters_mutex);
-      for(auto e: actor_parameters)
-        updated_actor_parameters[e.first] = e.second->update_and_reset(global_parameters);
-    }
-    TOC("updated_actor_parameters");
 
     {
       std::lock_guard<std::mutex> registration_lock(registration_mutex);
@@ -291,6 +283,25 @@ void FastTrafficManagerLocal::Run() {
       alsm.Update(world);
       TOC("alsm.Update");
     }
+
+    std::unordered_map<ActorId, ActorParameters> updated_actor_parameters;
+    {
+      // Fetch all actor info and apply the global parameters
+      std::lock_guard<std::mutex> lock(actor_parameters_mutex);
+      // TODO: This is somehow slow(-isch), maybe the alsm should keep
+      //       a list of registered objects around?
+      for(auto e: alsm.GetState()) {
+        // TODO: There might be a race condition here for objects that are registered after aslm is updated
+        if (e.second.registered && e.second.alive) {
+          auto i = actor_parameters.find(e.first);
+          if (i != actor_parameters.end())
+            updated_actor_parameters[e.first] = i->second->update_and_reset(global_parameters);
+          else
+            updated_actor_parameters[e.first] = ActorParameters().update_and_reset(global_parameters);
+        }
+      }
+    }
+    TOC("updated_actor_parameters");
 
     // Run core operation stages.
     for (const  auto & p: updated_actor_parameters)

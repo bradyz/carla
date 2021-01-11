@@ -82,6 +82,10 @@ public:
   void Register(const ActorId actor_id);
   void Unregister(const ActorId actor_id);
 
+  const std::unordered_map<ActorId, ActorState> & GetState() const {
+    return actor_info;
+  }
+
   void Reset();
 };
 
