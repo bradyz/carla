@@ -10,6 +10,7 @@
 #include "carla/trafficmanager/fast/Collision.h"
 #include "carla/trafficmanager/fast/Localization.h"
 #include "carla/trafficmanager/fast/TrafficLight.h"
+#include "carla/trafficmanager/fast/MotionPlanStage.h"
 
 namespace carla {
 namespace traffic_manager {
@@ -258,6 +259,9 @@ void FastTrafficManagerLocal::Run() {
 
   FastLocalizationStage localization_stage = FastLocalizationStage(alsm, local_map);
   FastTrafficLightStage traffic_light_stage = FastTrafficLightStage(alsm, world);
+  FastMotionPlanStage motion_plan_stage = FastMotionPlanStage(alsm, localization_stage.GetTrackTraffic(),
+                                                              longitudinal_PID_parameters, longitudinal_highway_PID_parameters,
+                                                              lateral_PID_parameters, lateral_highway_PID_parameters, world);
 
   TIMER("FastTrafficManagerLocal");
   while (run_traffic_manger.load()) {
@@ -316,24 +320,26 @@ void FastTrafficManagerLocal::Run() {
     for (const  auto & p: updated_actor_parameters) {
       traffic_light_stage.Update(p.first, p.second, global_parameters);
     }
-
-//
-//    for (unsigned long index = 0u; index < n_vehicles; ++index) {
-//      traffic_light_stage.Update(index);
-//      motion_plan_stage.Update(index);
-//    }
     TOC("traffic_light_stage");
+
+    ControlFrame control_frame;
+
+    for (const  auto & p: updated_actor_parameters) {
+      motion_plan_stage.Update(p.first, p.second, global_parameters);
+      control_frame.push_back(alsm.GetState(p.first).output);
+    }
+    TOC("motion_plan_stage");
 
     // Sending the current cycle's batch command to the simulator.
     if (synchronous_mode) {
       // If TCP and RPC preserve the call order then ApplyBatchSync is overkill here.
       // We do not need the response and only require the control_frame to be executed
       // before any other client commands
-//       episode_proxy.Lock()->ApplyBatch(control_frame, false);
+      episode_proxy.Lock()->ApplyBatch(control_frame, false);
       step_end.store(true);
       step_end_trigger.notify_one();
     } else {
-//       episode_proxy.Lock()->ApplyBatch(control_frame, false);
+      episode_proxy.Lock()->ApplyBatch(control_frame, false);
     }
     TOC("end");
     FINISH;

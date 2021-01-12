@@ -58,6 +58,9 @@ struct ActorState {
 
   // TrafficLight state
   bool traffic_light_hazard = false;
+
+  // Motion plan
+  carla::rpc::Command output;
 };
 
 class FastALSM {
